@@ -1,30 +1,42 @@
 const express = require('express');
 const cors = require('cors');
-const cron = require('node-cron');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 // ============================================
-// 1. CONFIGURATION - Pointez vers VOTRE API EXISTANTE
+// 1. CONFIGURATION
 // ============================================
 const YOUR_EXISTING_API_URL = 'https://getzenpay-email-api.onrender.com/api/send-welcome';
-const YOUR_API_KEY = 'GETZENPAY_2026_SECRET'; // Utilisez la même clé ou une clé dédiée
+const YOUR_API_KEY = 'GETZENPAY_2026_SECRET';
 
-// ============================================
-// 2. STOCKAGE (Base de données fictive)
-//    ⚠️ En production, remplacez par MongoDB, PostgreSQL ou Redis.
-// ============================================
 let scheduledTasks = [];
 let taskIdCounter = 1;
 
 // ============================================
-// 3. FONCTION QUI APPELLE VOTRE API EXISTANTE
+// 2. PAGE D'ACCUEIL - FIX DU BUG Impossible d'obtenir /
+// ============================================
+app.get('/', (req, res) => {
+  res.send(`
+    <html><head><meta charset="utf-8"><title>ZenPay Scheduler</title></head>
+    <body style="font-family:Arial;padding:40px;background:#f5f7fa">
+      <h1>✅ ZenPay Scheduler est en ligne</h1>
+      <p><b>URL:</b> https://zenpay-scheuler.onrender.com</p>
+      <p><b>API existante:</b> ${YOUR_EXISTING_API_URL}</p>
+      <p><b>Tâches en attente:</b> ${scheduledTasks.length}</p>
+      <hr>
+      <p><a href="/api/scheduled-tasks">Voir /api/scheduled-tasks</a></p>
+      <p style="color:#64748b;font-size:13px">Worker actif toutes les 30s</p>
+    </body></html>
+  `);
+});
+
+// ============================================
+// 3. FONCTION QUI APPELLE TON API EXISTANTE
 // ============================================
 async function callYourExistingApi(params) {
     const { recipientEmail, recipientName, subject, html, text } = params;
-
     try {
         const response = await fetch(YOUR_EXISTING_API_URL, {
             method: 'POST',
@@ -40,7 +52,6 @@ async function callYourExistingApi(params) {
                 text: text
             })
         });
-
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
             throw new Error(errorData.error || `Erreur HTTP ${response.status}`);
@@ -52,35 +63,19 @@ async function callYourExistingApi(params) {
 }
 
 // ============================================
-// 4. ENDPOINT POUR RECEVOIR UNE PROGRAMMATION
-//    (C'est là que votre site web enverra les données)
+// 4. PROGRAMMER UN EMAIL
 // ============================================
 app.post('/api/schedule', (req, res) => {
-    const { 
-        subject, 
-        recipientEmail, 
-        recipientName, 
-        brandName, 
-        messageHtml, 
-        messageText, 
-        scheduledAt 
-    } = req.body;
-
-    // Validations
-    if (!subject || !recipientEmail || !scheduledAt) {
+    const { subject, recipientEmail, recipientName, brandName, messageHtml, messageText, scheduledAt } = req.body;
+    if (!subject ||!recipientEmail ||!scheduledAt) {
         return res.status(400).json({ error: 'Champs obligatoires manquants (sujet, email, date)' });
     }
-
     const scheduledDate = new Date(scheduledAt);
     if (scheduledDate <= new Date()) {
         return res.status(400).json({ error: 'La date doit être dans le futur' });
     }
-
-    // Construction du sujet avec le suffixe (comme dans votre frontend)
     const suffix = generateSuffix();
     const fullSubject = `${suffix} ${subject}`;
-
-    // Génération du HTML complet (copié depuis votre frontend)
     const fullHtml = `
     <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f5f7fa; padding:20px;">
         <tr><td align="center">
@@ -97,9 +92,7 @@ app.post('/api/schedule', (req, res) => {
             </table>
         </td></tr>
     </table>`;
-
     const fullText = `Dzień dobry ${recipientName || 'Klient'},\n\n${messageText}\n\n--\nWiadomość wysłana via ${brandName || 'ZenPay'}`;
-
     const newTask = {
         id: taskIdCounter++,
         subject: fullSubject,
@@ -109,41 +102,32 @@ app.post('/api/schedule', (req, res) => {
         html: fullHtml,
         text: fullText,
         scheduledAt: scheduledDate.toISOString(),
-        status: 'pending', // pending | sent | failed
+        status: 'pending',
         createdAt: new Date().toISOString()
     };
-
     scheduledTasks.push(newTask);
-    console.log(`📅 [${new Date().toISOString()}] Tâche #${newTask.id} programmée pour ${newTask.scheduledAt}`);
-
-    res.status(201).json({ 
-        message: 'Email programmé avec succès', 
-        taskId: newTask.id 
-    });
+    console.log(`📅 Tâche #${newTask.id} programmée pour ${newTask.scheduledAt}`);
+    res.status(201).json({ message: 'Email programmé avec succès', taskId: newTask.id });
 });
 
 // ============================================
-// 5. (OPTIONNEL) ENDPOINT POUR VOIR LES TÂCHES
+// 5. VOIR LES TACHES
 // ============================================
 app.get('/api/scheduled-tasks', (req, res) => {
     res.json(scheduledTasks);
 });
 
 // ============================================
-// 6. WORKER : Vérification toutes les 30 secondes
+// 6. WORKER TOUTES LES 30 SECONDES
 // ============================================
 setInterval(async () => {
     const now = new Date();
-
     for (let i = scheduledTasks.length - 1; i >= 0; i--) {
         const task = scheduledTasks[i];
-        if (task.status !== 'pending') continue;
-
+        if (task.status!== 'pending') continue;
         const scheduledTime = new Date(task.scheduledAt);
         if (scheduledTime <= now) {
-            console.log(`⏰ [${new Date().toISOString()}] Exécution de la tâche #${task.id}...`);
-
-            // Ici, on appelle VOTRE API existante !
+            console.log(`⏰ Exécution tâche #${task.id}...`);
             const result = await callYourExistingApi({
                 recipientEmail: task.recipientEmail,
                 recipientName: task.recipientName,
@@ -151,21 +135,17 @@ setInterval(async () => {
                 html: task.html,
                 text: task.text
             });
-
             if (result.success) {
                 task.status = 'sent';
-                console.log(`✅ Tâche #${task.id} envoyée avec succès via l'API existante.`);
+                console.log(`✅ Tâche #${task.id} envoyée`);
             } else {
                 task.status = 'failed';
-                console.error(`❌ Échec de la tâche #${task.id}: ${result.error}`);
+                console.error(`❌ Échec tâche #${task.id}: ${result.error}`);
             }
         }
     }
-}, 30000); // 30 secondes
+}, 30000);
 
-// ============================================
-// 7. FONCTION UTILITAIRE
-// ============================================
 function generateSuffix() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let result = '';
@@ -173,12 +153,9 @@ function generateSuffix() {
     return result;
 }
 
-// ============================================
-// 8. LANCER LE SERVEUR
-// ============================================
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
-    console.log(`🚀 Service de planification ZenPay en écoute sur le port ${PORT}`);
-    console.log(`📡 Il utilisera l'API existante : ${YOUR_EXISTING_API_URL}`);
-    console.log('⏳ Worker de vérification actif (toutes les 30 secondes).');
+    console.log(`🚀 Service ZenPay en écoute sur le port ${PORT}`);
+    console.log(`📡 API: ${YOUR_EXISTING_API_URL}`);
+    console.log('⏳ Worker actif (30s)');
 });
