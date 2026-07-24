@@ -1,122 +1,134 @@
 const express = require('express');
 const cors = require('cors');
+
 const app = express();
-app.use(cors());
+const PORT = process.env.PORT || 10000;
+
+// --- CONFIG ---
+const EMAIL_API_URL = 'https://getzenpay-email-api.onrender.com/api/send-welcome';
+
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-const YOUR_EXISTING_API_URL = 'https://getzenpay-email-api.onrender.com/api/send-welcome';
-const YOUR_API_KEY = 'GETZENPAY_2026_SECRET';
+let tasks = []; // Stockage en mémoire
 
-let scheduledTasks = [];
-let taskIdCounter = 1;
-
-// Réveille ton API email au démarrage
-fetch(YOUR_EXISTING_API_URL).catch(()=>{});
-
-app.get('/',(req,res)=>res.send(`<h1>✅ ZenPay Scheduler Tous Pays</h1><p>Pending: ${scheduledTasks.filter(t=>t.status==='pending').length}</p>`));
-
-async function callYourExistingApi(p){
- for(let attempt=1; attempt<=5; attempt++){
-  try{
-   if(attempt>1) await new Promise(r=>setTimeout(r, 3000*attempt));
-   if(attempt===1) await fetch(YOUR_EXISTING_API_URL).catch(()=>{});
-   
-   const controller = new AbortController();
-   const t = setTimeout(()=>controller.abort(), 30000);
-   
-   const response = await fetch(YOUR_EXISTING_API_URL,{
-    method:'POST',
-    headers:{'Content-Type':'application/json','x-api-key':YOUR_API_KEY},
-    body:JSON.stringify({
-     email:p.recipientEmail,
-     prenom:p.recipientName,
-     sujet:p.subject,
-     html:p.html,
-     text:p.text
-    }),
-    signal:controller.signal
-   });
-   clearTimeout(t);
-   const txt = await response.text();
-   if(!response.ok) throw new Error(txt);
-   return {success:true};
-  }catch(e){
-   console.log(`Tentative ${attempt}/5 échouée: ${e.message}`);
-   if(attempt===5) return {success:false, error:e.message};
+// Fonction pour comprendre l'heure Bénin / Pologne
+function parseDateWithTimezone(dateStr, timezoneLabel) {
+  // dateStr reçu: "2026-07-24 11:31" ou "2026-07-24T11:31"
+  let offset = "+01:00"; // Bénin - Cotonou par défaut
+  if (timezoneLabel) {
+    const t = timezoneLabel.toLowerCase();
+    if (t.includes('varsovie') || t.includes('pologne') || t.includes('poland')) offset = "+02:00";
+    if (t.includes('cotonou') || t.includes('porto-novo') || t.includes('bénin') || t.includes('benin')) offset = "+01:00";
   }
- }
+  let iso = dateStr.trim().replace(' ', 'T');
+  if (iso.length === 16) iso += ":00"; // ajoute les secondes
+  if (!iso.includes('+') && !iso.includes('Z')) {
+    iso += offset;
+  }
+  return new Date(iso);
 }
 
-app.post('/api/schedule',(req,res)=>{
- const {subject,recipientEmail,recipientName,brandName,messageHtml,messageText,scheduledAt,clientTimezone,clientTimezoneLabel,clientLocalDateTime}=req.body;
- if(!subject||!recipientEmail||!scheduledAt) return res.status(400).json({error:'Champs manquants'});
- const task={
-  id:String(taskIdCounter++),
-  subject:`${generateSuffix()} ${subject}`,
-  originalSubject:subject,
-  recipientEmail, recipientName:recipientName||'Klient', brandName:brandName||'ZenPay',
-  html:`<table width="100%" style="background:#f5f7fa;padding:20px"><tr><td align="center"><table width="600" style="background:#fff;border-radius:10px;overflow:hidden"><tr><td style="background:#6A1B9A;padding:30px;text-align:center;color:#fff;font-size:28px;font-weight:bold">${brandName||'ZenPay'}</td></tr><tr><td style="padding:30px;font-size:18px">${messageHtml}</td></tr></table></td></tr></table>`,
-  text:messageText,
-  originalMessageHtml:messageHtml, originalMessageText:messageText,
-  scheduledAt:new Date(scheduledAt).toISOString(),
-  clientTimezone:clientTimezone||'UTC', clientTimezoneLabel:clientTimezoneLabel||clientTimezone, clientLocalDateTime:clientLocalDateTime||scheduledAt,
-  status:'pending', createdAt:new Date().toISOString(), attempts:0
- };
- scheduledTasks.push(task);
- res.status(201).json(task);
+// --- ROUTES ---
+
+app.get('/', (req, res) => {
+  res.send('ZenPay Scheduler OK - ' + new Date().toISOString());
 });
 
-app.get('/api/scheduled-tasks',(req,res)=>res.json(scheduledTasks));
-
-app.put('/api/scheduled-tasks/:id',(req,res)=>{
- const t=scheduledTasks.find(x=>x.id===req.params.id);
- if(!t||t.status!=='pending') return res.status(400).json({error:'Non modifiable'});
- const {subject,recipientEmail,recipientName,brandName,messageHtml,messageText,scheduledAt,clientTimezone,clientTimezoneLabel,clientLocalDateTime}=req.body;
- if(subject) t.originalSubject=subject, t.subject=`${generateSuffix()} ${subject}`;
- if(recipientEmail) t.recipientEmail=recipientEmail;
- if(recipientName) t.recipientName=recipientName;
- if(brandName) t.brandName=brandName;
- if(messageHtml) t.originalMessageHtml=messageHtml, t.html=t.html.replace(/<div>.*<\/div>/s, `<div>${messageHtml}</div>`);
- if(messageText) t.originalMessageText=messageText, t.text=messageText;
- if(scheduledAt) t.scheduledAt=new Date(scheduledAt).toISOString();
- if(clientTimezone) t.clientTimezone=clientTimezone;
- if(clientTimezoneLabel) t.clientTimezoneLabel=clientTimezoneLabel;
- if(clientLocalDateTime) t.clientLocalDateTime=clientLocalDateTime;
- res.json(t);
+app.get('/api/tasks', (req, res) => {
+  res.json(tasks);
 });
 
-app.delete('/api/scheduled-tasks/:id',(req,res)=>{
- scheduledTasks=scheduledTasks.filter(x=>x.id!==req.params.id);
- res.json({ok:true});
-});
-app.delete('/api/scheduled-tasks',(req,res)=>{
- const {status}=req.query;
- if(!status) return res.status(400).json({error:'?status=sent ou failed'});
- const before=scheduledTasks.length;
- scheduledTasks=scheduledTasks.filter(t=>t.status!==status);
- res.json({deleted:before-scheduledTasks.length});
-});
-
-setInterval(async()=>{
- const now=new Date();
- for(let t of scheduledTasks){
-  if(t.status!=='pending') continue;
-  if(new Date(t.scheduledAt)<=now){
-   console.log(`⏰ Envoi #${t.id} ${t.clientTimezoneLabel} ${t.clientLocalDateTime}`);
-   const r=await callYourExistingApi(t);
-   if(r.success){
-    t.status='sent'; t.sentAt=new Date().toISOString();
-    console.log(`✅ #${t.id} envoyé`);
-   }else{
-    // Ne passe pas en échec, reprogramme dans 1 min
-    t.attempts++;
-    t.scheduledAt=new Date(Date.now()+60000).toISOString();
-    console.log(`🔄 #${t.id} retry dans 1min (tentative ${t.attempts})`);
-    if(t.attempts>20) t.status='failed';
-   }
+app.post('/api/schedule', (req, res) => {
+  const { email, subject, message, scheduledAt, timezone, pays } = req.body;
+  
+  if (!email || !scheduledAt) {
+    return res.status(400).json({ error: 'email et scheduledAt requis' });
   }
- }
-},20000);
 
-function generateSuffix(){let r='';const c='ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';for(let i=0;i<4;i++)r+=c[Math.floor(Math.random()*c.length)];return r;}
-app.listen(process.env.PORT||10000,()=>console.log('Scheduler FINAL prêt'));
+  const task = {
+    id: Date.now().toString(),
+    email: email,
+    subject: subject || 'Bienvenue chez nous Jeanne.',
+    message: message || '',
+    scheduledAt: scheduledAt, // ex: "2026-07-24 11:31"
+    timezone: timezone || pays || 'Bénin - Cotonou',
+    pays: pays || timezone || 'Bénin - Cotonou',
+    status: 'EN ATTENTE',
+    createdAt: new Date().toISOString(),
+    scheduledAtUTC: parseDateWithTimezone(scheduledAt, timezone || pays).toISOString()
+  };
+
+  tasks.push(task);
+  console.log(`[NEW TASK] ${task.email} programmé pour ${task.scheduledAt} (${task.timezone}) -> UTC: ${task.scheduledAtUTC}`);
+  res.json(task);
+});
+
+app.delete('/api/tasks/:id', (req, res) => {
+  tasks = tasks.filter(t => t.id !== req.params.id);
+  res.json({ success: true });
+});
+
+app.delete('/api/tasks', (req, res) => {
+  const { status } = req.query; // ?status=ÉCHEC ou ENVOYÉ
+  if (status) {
+    tasks = tasks.filter(t => t.status !== status);
+  } else {
+    tasks = [];
+  }
+  res.json({ success: true });
+});
+
+app.put('/api/tasks/:id', (req, res) => {
+  const task = tasks.find(t => t.id === req.params.id);
+  if (!task) return res.status(404).json({ error: 'not found' });
+  Object.assign(task, req.body);
+  if (req.body.scheduledAt) {
+    task.scheduledAtUTC = parseDateWithTimezone(req.body.scheduledAt, req.body.timezone || task.timezone).toISOString();
+  }
+  res.json(task);
+});
+
+// --- MOTEUR D'ENVOI (toutes les 5 secondes) ---
+
+setInterval(async () => {
+  const now = new Date();
+  for (let task of tasks) {
+    if (task.status !== 'EN ATTENTE') continue;
+
+    const scheduledTime = new Date(task.scheduledAtUTC);
+    
+    if (scheduledTime <= now) {
+      console.log(`[SEND] Tentative d'envoi à ${task.email} prévu à ${task.scheduledAtUTC}`);
+      try {
+        const response = await fetch(EMAIL_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: task.email,
+            subject: task.subject,
+            text: task.message,
+            html: task.message
+          })
+        });
+        
+        if (response.ok) {
+          task.status = 'ENVOYÉ';
+          task.sentAt = new Date().toISOString();
+          console.log(`[SUCCESS] Envoyé à ${task.email}`);
+        } else {
+          const txt = await response.text();
+          console.log(`[FAIL] API Email a répondu ${response.status}: ${txt}`);
+          task.status = 'ÉCHEC';
+        }
+      } catch (err) {
+        console.error(`[ERROR] Impossible de joindre Email API:`, err.message);
+        task.status = 'ÉCHEC';
+      }
+    }
+  }
+}, 5000);
+
+app.listen(PORT, () => {
+  console.log(`Scheduler démarré sur port ${PORT}`);
+});
