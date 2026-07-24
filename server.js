@@ -15,42 +15,32 @@ let scheduledTasks = [];
 let taskIdCounter = 1;
 
 // ============================================
-// 2. PAGE D'ACCUEIL - FIX DU BUG Impossible d'obtenir /
+// 2. PAGE D'ACCUEIL
 // ============================================
 app.get('/', (req, res) => {
   res.send(`
     <html><head><meta charset="utf-8"><title>ZenPay Scheduler</title></head>
     <body style="font-family:Arial;padding:40px;background:#f5f7fa">
-      <h1>✅ ZenPay Scheduler est en ligne</h1>
+      <h1>✅ ZenPay Scheduler est en ligne - Version Tous Pays</h1>
       <p><b>URL:</b> https://zenpay-scheuler.onrender.com</p>
-      <p><b>API existante:</b> ${YOUR_EXISTING_API_URL}</p>
-      <p><b>Tâches en attente:</b> ${scheduledTasks.length}</p>
+      <p><b>Tâches en attente:</b> ${scheduledTasks.filter(t=>t.status==='pending').length} / ${scheduledTasks.length}</p>
       <hr>
       <p><a href="/api/scheduled-tasks">Voir /api/scheduled-tasks</a></p>
-      <p style="color:#64748b;font-size:13px">Worker actif toutes les 30s</p>
+      <p style="color:#64748b;font-size:13px">Chaque tâche garde son pays et son heure exacte</p>
     </body></html>
   `);
 });
 
 // ============================================
-// 3. FONCTION QUI APPELLE TON API EXISTANTE
+// 3. FONCTION QUI APPELLE TON API
 // ============================================
 async function callYourExistingApi(params) {
     const { recipientEmail, recipientName, subject, html, text } = params;
     try {
         const response = await fetch(YOUR_EXISTING_API_URL, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'x-api-key': YOUR_API_KEY
-            },
-            body: JSON.stringify({
-                email: recipientEmail,
-                prenom: recipientName,
-                sujet: subject,
-                html: html,
-                text: text
-            })
+            headers: { 'Content-Type': 'application/json', 'x-api-key': YOUR_API_KEY },
+            body: JSON.stringify({ email: recipientEmail, prenom: recipientName, sujet: subject, html, text })
         });
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
@@ -63,12 +53,17 @@ async function callYourExistingApi(params) {
 }
 
 // ============================================
-// 4. PROGRAMMER UN EMAIL
+// 4. PROGRAMMER - CORRIGÉ TOUS PAYS
 // ============================================
 app.post('/api/schedule', (req, res) => {
-    const { subject, recipientEmail, recipientName, brandName, messageHtml, messageText, scheduledAt } = req.body;
+    const { 
+      subject, recipientEmail, recipientName, brandName, 
+      messageHtml, messageText, scheduledAt,
+      clientTimezone, clientTimezoneLabel, clientLocalDateTime 
+    } = req.body;
+
     if (!subject ||!recipientEmail ||!scheduledAt) {
-        return res.status(400).json({ error: 'Champs obligatoires manquants (sujet, email, date)' });
+        return res.status(400).json({ error: 'Champs obligatoires manquants' });
     }
     const scheduledDate = new Date(scheduledAt);
     if (scheduledDate <= new Date()) {
@@ -81,33 +76,39 @@ app.post('/api/schedule', (req, res) => {
         <tr><td align="center">
             <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff; border-radius:10px; overflow:hidden;">
                 <tr><td style="background-color:#6A1B9A; padding:45px 20px; text-align:center;">
-                    <span style="font-size:72px; font-weight:bold; color:#ffffff; letter-spacing:2px;">${brandName || 'ZenPay'}</span>
+                    <span style="font-size:72px; font-weight:bold; color:#ffffff;">${brandName || 'ZenPay'}</span>
                 </td></tr>
-                <tr><td style="padding:35px; color:#333333; font-size:22px; line-height:2.0;">
-                    <p style="margin-top:0; font-size:24px;">Dzień dobry, <strong>${recipientName || 'Klient'}</strong></p>
+                <tr><td style="padding:35px; color:#333; font-size:22px; line-height:2.0;">
+                    <p>Dzień dobry, <strong>${recipientName || 'Klient'}</strong></p>
                     <div style="font-size:20px; color:#1f2937;">${messageHtml}</div>
-                    <hr style="border:none; border-top:1px solid #e0e0e0; margin:35px 0;">
-                    <p style="font-size:16px; color:#6b7280;"><i>Wiadomość wysłana via ${brandName || 'ZenPay'}</i></p>
                 </td></tr>
             </table>
         </td></tr>
     </table>`;
-    const fullText = `Dzień dobry ${recipientName || 'Klient'},\n\n${messageText}\n\n--\nWiadomość wysłana via ${brandName || 'ZenPay'}`;
+    const fullText = `Dzień dobry ${recipientName || 'Klient'},\n\n${messageText}`;
+
     const newTask = {
         id: taskIdCounter++,
         subject: fullSubject,
+        originalSubject: subject,
         recipientEmail,
         recipientName: recipientName || 'Klient',
         brandName: brandName || 'ZenPay',
         html: fullHtml,
         text: fullText,
-        scheduledAt: scheduledDate.toISOString(),
+        scheduledAt: scheduledDate.toISOString(), // Heure UTC réelle d'envoi
+        
+        // NOUVEAU - On garde le pays
+        clientTimezone: clientTimezone || 'UTC',
+        clientTimezoneLabel: clientTimezoneLabel || clientTimezone || 'UTC',
+        clientLocalDateTime: clientLocalDateTime || scheduledAt, // ex: 2026-07-24T06:57
+
         status: 'pending',
         createdAt: new Date().toISOString()
     };
     scheduledTasks.push(newTask);
-    console.log(`📅 Tâche #${newTask.id} programmée pour ${newTask.scheduledAt}`);
-    res.status(201).json({ message: 'Email programmé avec succès', taskId: newTask.id });
+    console.log(`📅 #${newTask.id} ${newTask.originalSubject} -> ${newTask.clientTimezoneLabel} à ${newTask.clientLocalDateTime} = ${newTask.scheduledAt}`);
+    res.status(201).json({ message: 'Email programmé', taskId: newTask.id, task: newTask });
 });
 
 // ============================================
@@ -118,16 +119,15 @@ app.get('/api/scheduled-tasks', (req, res) => {
 });
 
 // ============================================
-// 6. WORKER TOUTES LES 30 SECONDES
+// 6. WORKER
 // ============================================
 setInterval(async () => {
     const now = new Date();
     for (let i = scheduledTasks.length - 1; i >= 0; i--) {
         const task = scheduledTasks[i];
         if (task.status!== 'pending') continue;
-        const scheduledTime = new Date(task.scheduledAt);
-        if (scheduledTime <= now) {
-            console.log(`⏰ Exécution tâche #${task.id}...`);
+        if (new Date(task.scheduledAt) <= now) {
+            console.log(`⏰ Envoi #${task.id} ${task.clientTimezoneLabel} ${task.clientLocalDateTime}`);
             const result = await callYourExistingApi({
                 recipientEmail: task.recipientEmail,
                 recipientName: task.recipientName,
@@ -135,27 +135,17 @@ setInterval(async () => {
                 html: task.html,
                 text: task.text
             });
-            if (result.success) {
-                task.status = 'sent';
-                console.log(`✅ Tâche #${task.id} envoyée`);
-            } else {
-                task.status = 'failed';
-                console.error(`❌ Échec tâche #${task.id}: ${result.error}`);
-            }
+            task.status = result.success ? 'sent' : 'failed';
+            task.sentAt = new Date().toISOString();
         }
     }
 }, 30000);
 
 function generateSuffix() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let result = '';
-    for (let i = 0; i < 4; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
-    return result;
+    let r = ''; for (let i = 0; i < 4; i++) r += chars.charAt(Math.floor(Math.random() * chars.length));
+    return r;
 }
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-    console.log(`🚀 Service ZenPay en écoute sur le port ${PORT}`);
-    console.log(`📡 API: ${YOUR_EXISTING_API_URL}`);
-    console.log('⏳ Worker actif (30s)');
-});
+app.listen(PORT, () => console.log(`🚀 Scheduler Tous Pays sur ${PORT}`));
